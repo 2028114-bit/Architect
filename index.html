@@ -56,7 +56,7 @@
         /* --- PREVIEW PANEL --- */
         #preview-panel { width: 40%; background: white; border-left: 2px solid var(--border); display: flex; flex-direction: column; }
         .preview-header { height: 30px; background: #f3f3f3; display: flex; align-items: center; padding: 0 10px; font-size: 11px; color: #666; border-bottom: 1px solid #ccc; justify-content: space-between; }
-        #sandbox-root { flex: 1; }
+        #sandbox-root { flex: 1; overflow: hidden; }
         iframe { width: 100%; height: 100%; border: none; }
 
         .status-bar { height: 22px; background: var(--bg-status); color: white; display: flex; justify-content: space-between; align-items: center; padding: 0 12px; font-size: 11px; }
@@ -68,13 +68,12 @@
     <div class="menu-item">File
         <div class="dropdown">
             <div class="dropdown-item" onclick="location.reload()">New Window</div>
-            <div class="dropdown-item" onclick="updatePreview()">Save Project <span style="opacity:0.5">Ctrl+S</span></div>
+            <div class="dropdown-item" onclick="updatePreview()">Save Project <span>Ctrl+S</span></div>
         </div>
     </div>
-    <div class="menu-item">Edit</div>
     <div class="menu-item">Run
         <div class="dropdown">
-            <div class="dropdown-item" onclick="updatePreview()" style="color:#4ec9b0">Start Debugging <span style="opacity:0.5">F5</span></div>
+            <div class="dropdown-item" onclick="updatePreview()" style="color:#4ec9b0">Start Debugging <span>F5</span></div>
         </div>
     </div>
     <div class="menu-item" onclick="updatePreview()" style="color: #4ec9b0; font-weight: bold; margin-left: auto; padding-right: 20px;">
@@ -122,7 +121,7 @@
 </div>
 
 <div class="status-bar">
-    <div><i class="fa-solid fa-check"></i> Connected to Sandpack</div>
+    <div id="engine-status"><i class="fa-solid fa-spinner fa-spin"></i> Initializing Engine...</div>
     <div id="status-right">UTF-8 | <span id="lang-label">HTML</span></div>
 </div>
 
@@ -131,24 +130,15 @@
     let client;
     let activeFile = '/index.html';
 
-    // Virtual File System
     const files = {
-        "/index.html": {
-            code: `<!DOCTYPE html>\n<html>\n<head>\n  <link rel="stylesheet" href="style.css">\n</head>\n<body>\n  <h1>Architect Studio</h1>\n  <p>Status: <span id="status">Online</span></p>\n  <button id="action">Test Interaction</button>\n  <script src="script.js"><\/script>\n</body>\n</html>`
-        },
-        "/style.css": {
-            code: `body { \n  background: #1e1e1e; \n  color: white; \n  font-family: 'Segoe UI', sans-serif; \n  text-align: center; \n  padding-top: 100px; \n}\nh1 { color: #007acc; }\nbutton { \n  padding: 10px 20px; \n  background: #007acc; \n  color: white; \n  border: none; \n  cursor: pointer; \n  border-radius: 4px; \n}`
-        },
-        "/script.js": {
-            code: `const btn = document.getElementById('action');\nbtn.onclick = () => {\n  alert('Virtual environment working!');\n  console.log('Interaction logged.');\n};`
-        }
+        "/index.html": { code: `<!DOCTYPE html>\n<html>\n<head>\n  <link rel="stylesheet" href="style.css">\n</head>\n<body>\n  <h1>Architect Studio</h1>\n  <p>Environment: <span id="env">Stable</span></p>\n  <button id="btn">Click for Action</button>\n  <script src="script.js"><\/script>\n</body>\n</html>` },
+        "/style.css": { code: `body { background: #1e1e1e; color: white; font-family: 'Segoe UI', sans-serif; text-align: center; padding-top: 100px; }\nh1 { color: #007acc; }\nbutton { padding: 10px 20px; background: #007acc; color: white; border: none; cursor: pointer; border-radius: 4px; }` },
+        "/script.js": { code: `document.getElementById('btn').onclick = () => {\n  alert('Virtual environment linked successfully!');\n};` }
     };
 
-    // Load Monaco & Sandpack
+    // 1. Setup Monaco
     require.config({ paths: { 'vs': 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs' }});
-    require(['vs/editor/editor.main'], async function() {
-        
-        // Initialize Editor
+    require(['vs/editor/editor.main'], function() {
         editor = monaco.editor.create(document.getElementById('editor-container'), {
             value: files[activeFile].code,
             language: 'html',
@@ -158,31 +148,46 @@
             minimap: { enabled: false }
         });
 
-        const container = document.getElementById("sandbox-root");
-
-        try {
-            // FIXED: Using correct Sandpack constructor for CDN version
-            client = new SandpackClient.SandpackClient(container, {
-                files: files,
-                template: "static",
-            });
-            console.log("Sandpack initialized successfully.");
-        } catch (err) {
-            console.error("Sandpack Error:", err);
-        }
-
-        // Auto-save changes to local object
         editor.onDidChangeModelContent(() => {
             files[activeFile].code = editor.getValue();
         });
+
+        // Start Sandpack initialization once Monaco is ready
+        initSandpack(0);
     });
 
+    // 2. Setup Sandpack with Global variable check and Retry Loop
+    function initSandpack(retries) {
+        const container = document.getElementById("sandbox-root");
+        
+        // Use window explicitly to bypass Monaco loader conflicts
+        const SP = window.SandpackClient || (window.sandpack && window.sandpack.SandpackClient);
+
+        if (SP) {
+            try {
+                // Initialize the client
+                client = new SP.SandpackClient(container, {
+                    files: files,
+                    template: "static",
+                });
+                document.getElementById('engine-status').innerHTML = '<i class="fa-solid fa-check"></i> Engine Online';
+                console.log("Sandpack Client Ready.");
+            } catch (err) {
+                console.error("Initialization error:", err);
+                document.getElementById('engine-status').innerText = "Engine Error.";
+            }
+        } else if (retries < 15) {
+            // Retry every 200ms for up to 3 seconds
+            setTimeout(() => initSandpack(retries + 1), 200);
+        } else {
+            document.getElementById('engine-status').innerText = "Library Load Failed.";
+        }
+    }
+
     function switchFile(path) {
-        // Save current code
         files[activeFile].code = editor.getValue();
         activeFile = path;
 
-        // UI Toggles
         document.querySelectorAll('.tab, .file-item').forEach(el => el.classList.remove('active'));
         document.getElementById('t-' + path.substring(1)).classList.add('active');
         document.getElementById('f-' + path.substring(1)).classList.add('active');
@@ -197,31 +202,22 @@
 
     async function updatePreview() {
         if (!client) {
-            console.warn("Client not ready yet.");
+            alert("The engine is still warming up. Please try again in a moment.");
             return;
         }
         
-        // Ensure the latest code is in the files object
         files[activeFile].code = editor.getValue();
-
-        // Push update to the virtual server
-        await client.updatePreview({
-            files: files
-        });
-        
-        console.log("Project Updated.");
+        try {
+            await client.updatePreview({ files: files });
+            console.log("Preview Pushed.");
+        } catch (e) {
+            console.error("Update failed:", e);
+        }
     }
 
-    // Keyboard Shortcuts
     window.addEventListener('keydown', e => {
-        if ((e.ctrlKey || e.metaKey) && e.key === 's') {
-            e.preventDefault();
-            updatePreview();
-        }
-        if (e.key === 'F5') {
-            e.preventDefault();
-            updatePreview();
-        }
+        if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); updatePreview(); }
+        if (e.key === 'F5') { e.preventDefault(); updatePreview(); }
     });
 </script>
 </body>
